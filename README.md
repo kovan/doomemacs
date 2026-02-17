@@ -69,8 +69,9 @@ Check out [the FAQ][FAQ] for answers to common questions about the project.
 - A modular organizational structure for separating concerns in your config.
 - A standard library designed to simplify your elisp bike shedding.
 - A declarative [package management system][package-management] (powered by
-  [straight.el]) with a command line interface. Install packages from anywhere,
-  not just (M)ELPA, and pin them to any commit.
+  [GNU Guix][guix]) with a command line interface. Install packages from
+  anywhere, not just (M)ELPA, and pin them to any commit. Guix provides
+  reproducible builds, atomic upgrades/rollbacks, and per-profile isolation.
 - Optional vim emulation powered by [evil-mode], including ports of popular vim
   plugins like [vim-sneak], [vim-easymotion], [vim-unimpaired] and
   [more][ported-vim-plugins]!
@@ -103,6 +104,7 @@ Check out [the FAQ][FAQ] for answers to common questions about the project.
     - If only using Doom's core, 27.1+ is required.
     - If using Doom's modules, 28.1+ is required.
     - Tree-sitter support requires 29.1+, but much improved in 30.1+.
+  - [GNU Guix][guix] (package manager)
   - Git >= 2.23
   - [ripgrep] >= 11.0
 - **Optional, but recommended:**
@@ -115,11 +117,98 @@ Check out [the FAQ][FAQ] for answers to common questions about the project.
 > or `.9X` (e.g. `28.1.91`). Doom should generally work on Emacs HEAD (the
 > maintainer dogfoods it), but support lags behind the bleeding edge by at least
 > a month or so.
- 
+
 > [!IMPORTANT]
 > Doom is comprised of [~150 optional modules][Modules], some of which may have
 > additional dependencies. [Visit their documentation][Modules] or run `bin/doom
 > doctor` to check for any that you may have missed.
+
+
+## Installing Guix
+
+This fork requires [GNU Guix][guix] for package management. Below are
+installation instructions for common platforms.
+
+### Guix System (GuixSD)
+
+Guix is already available. No extra steps needed.
+
+### Debian / Ubuntu
+
+```sh
+sudo apt install guix
+```
+
+If the version in your distro's repos is too old, use the official installer:
+
+```sh
+cd /tmp
+wget https://git.savannah.gnu.org/cgit/guix.git/plain/etc/guix-install.sh
+chmod +x guix-install.sh
+sudo ./guix-install.sh
+```
+
+### Fedora
+
+```sh
+cd /tmp
+wget https://git.savannah.gnu.org/cgit/guix.git/plain/etc/guix-install.sh
+chmod +x guix-install.sh
+sudo ./guix-install.sh
+```
+
+### Arch Linux
+
+```sh
+pacman -S guix
+```
+
+Or from the AUR:
+
+```sh
+yay -S guix
+```
+
+### openSUSE
+
+```sh
+cd /tmp
+wget https://git.savannah.gnu.org/cgit/guix.git/plain/etc/guix-install.sh
+chmod +x guix-install.sh
+sudo ./guix-install.sh
+```
+
+### macOS
+
+Install via the official binary tarball:
+
+```sh
+cd /tmp
+curl -O https://git.savannah.gnu.org/cgit/guix.git/plain/etc/guix-install.sh
+chmod +x guix-install.sh
+sudo ./guix-install.sh
+```
+
+> [!NOTE]
+> On macOS, you may need to set up the Guix daemon and build users manually.
+> See the [Guix installation manual][guix-install] for full details.
+
+### Post-install (all platforms)
+
+After installing Guix, ensure the daemon is running and your profile is sourced:
+
+```sh
+# Start the daemon (if not started by your init system)
+sudo systemctl enable --now guix-daemon  # systemd
+# or: sudo guix-daemon --build-users-group=guixbuild &
+
+# Source the profile in your shell
+GUIX_PROFILE="$HOME/.guix-profile"
+. "$GUIX_PROFILE/etc/profile"
+
+# Verify
+guix --version
+```
 
 
 # Install
@@ -143,6 +232,8 @@ commands you should know about:
 + `doom env` to dump a snapshot of your shell environment to a file that Doom
   will load at startup. This allows Emacs to inherit your `PATH`, among other
   things.
++ `doom test` to run the test suite. Uses ERT (Emacs' built-in test framework)
+  by default. You can target specific tests, e.g. `doom test guix`.
 
 
 # Roadmap
@@ -249,6 +340,8 @@ kind!
 [nix]: https://nixos.org
 [ported-vim-plugins]: modules/editor/evil/README.org#ported-vim-plugins
 [ripgrep]: https://github.com/BurntSushi/ripgrep
+[guix]: https://guix.gnu.org
+[guix-install]: https://guix.gnu.org/manual/en/html_node/Installation.html
 [straight.el]: https://github.com/radian-software/straight.el
 [vim-easymotion]: https://github.com/easymotion/vim-easymotion
 [vim-lion]: https://github.com/tommcdo/vim-lion
