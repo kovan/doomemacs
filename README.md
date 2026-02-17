@@ -22,6 +22,7 @@
 - [Features](#features)
 - [Prerequisites](#prerequisites)
 - [Install](#install)
+- [Package Management](#package-management)
 - [Roadmap](#roadmap)
 - [Getting help](#getting-help)
 - [Contribute](#contribute)
@@ -234,6 +235,134 @@ commands you should know about:
   things.
 + `doom test` to run the test suite. Uses ERT (Emacs' built-in test framework)
   by default. You can target specific tests, e.g. `doom test guix`.
+
+
+# Package Management
+
+Doom uses [GNU Guix][guix] as its package management backend. Packages are
+declared in `packages.el` files using the `package!` macro and managed through
+a dedicated Guix profile. This gives you reproducible builds, atomic
+upgrades/rollbacks, and isolation from your system Emacs packages.
+
+## Declaring packages
+
+Add `package!` declarations to `~/.doom.d/packages.el` (your private config)
+or to a module's `packages.el`:
+
+```emacs-lisp
+;; Install a package from the guix-emacs channel (mirrors MELPA)
+(package! evil-surround)
+
+;; Pin to a specific commit for reproducibility
+(package! magit
+  :pin "abc1234567890")
+
+;; Install from a custom Git repository
+(package! my-package
+  :recipe (:host github :repo "user/my-package"))
+
+;; Use GitLab, Codeberg, Sourcehut, or Bitbucket
+(package! another-package
+  :recipe (:host gitlab :repo "user/another-package"))
+
+;; Or a direct Git URL
+(package! some-package
+  :recipe (:url "https://example.com/repo.git"))
+
+;; Only include specific files from the repo
+(package! big-package
+  :recipe (:host github :repo "user/big-package"
+           :files ("big-package.el" "extensions/*.el")))
+
+;; Disable a package installed by a module
+(package! package-i-dont-want :disable t)
+
+;; Don't install this package (but don't disable use-package! blocks)
+(package! optional-dep :ignore t)
+
+;; Use the built-in version instead of installing
+(package! org :built-in t)
+
+;; Prefer built-in if available, otherwise install
+(package! jsonrpc :built-in 'prefer)
+
+;; Override the Guix package name (when it doesn't follow emacs-<name>)
+(package! vterm :guix-name "emacs-vterm-next")
+```
+
+## `package!` properties reference
+
+| Property     | Description                                                  |
+|:-------------|:-------------------------------------------------------------|
+| `:pin`       | Pin to a commit hash string. `nil` to unpin.                 |
+| `:recipe`    | Plist specifying where to fetch the package (see below).     |
+| `:disable`   | If non-nil, don't install and disable `use-package!` blocks. |
+| `:ignore`    | If non-nil, don't install (but don't disable config blocks). |
+| `:built-in`  | `t` to use built-in version. `'prefer` to prefer built-in.  |
+| `:type`      | `core`, `local`, `built-in`, or `virtual`.                   |
+| `:env`       | Alist of env vars to set during build. Triggers rebuild on change. |
+| `:guix-name` | Override the Guix package name (default: `emacs-<name>`).    |
+
+### Recipe keys
+
+| Key           | Description                                                |
+|:--------------|:-----------------------------------------------------------|
+| `:host`       | `github`, `gitlab`, `codeberg`, `sourcehut`, or `bitbucket` |
+| `:repo`       | Repository path, e.g. `"user/repo"`                        |
+| `:url`        | Direct Git URL (alternative to `:host`/`:repo`)             |
+| `:branch`     | Git branch to track                                         |
+| `:files`      | List of files/globs to include in the build                 |
+| `:build`      | Build instructions (`t`, `nil`, or list of build steps)     |
+| `:pre-build`  | Elisp form to run before building                           |
+| `:local-repo` | Local directory name or path for the repo                   |
+
+## How it works
+
+1. **Declaration**: `package!` calls in `packages.el` files populate
+   `doom-packages` with package metadata.
+2. **Channel generation**: `doom sync` translates these declarations into Guix
+   package definitions (Guile Scheme) and writes them to a local Guix channel
+   at `~/.emacs.d/.local/guix-channel/`.
+3. **Profile build**: Guix installs all packages into a dedicated profile at
+   `~/.emacs.d/.local/guix-profile/`, resolving dependencies automatically.
+4. **Load path**: At startup, Doom adds the profile's `site-lisp` directories
+   to Emacs' `load-path`.
+
+Pinned packages (`:pin`) get their own package definitions with the exact
+commit hash baked in. Unpinned packages inherit from the
+[guix-emacs](https://github.com/garrgravarr/guix-emacs) channel, which mirrors
+MELPA.
+
+## CLI commands
+
+```sh
+# Sync config: install missing packages, remove orphans, regenerate caches
+doom sync
+
+# Update all packages (pulls channel updates + rebuilds profile)
+doom upgrade
+
+# Update only pinned packages
+doom sync -u
+
+# Force rebuild all packages
+doom sync --rebuild
+
+# Diagnose issues with your setup
+doom doctor
+```
+
+## Rollback
+
+Because Guix profiles are atomic, you can roll back to a previous state:
+
+```sh
+# List profile generations
+guix package --profile=~/.emacs.d/.local/guix-profile --list-generations
+
+# Roll back to the previous generation
+guix package --profile=~/.emacs.d/.local/guix-profile --roll-back
+```
 
 
 # Roadmap
