@@ -283,6 +283,7 @@
 
 (ert-deftest doom-package-built-in-p/type-property ()
   "doom-package-built-in-p detects :type built-in."
+  (require 'package)
   (let ((doom-packages '((org :type built-in))))
     (should (doom-package-built-in-p 'org))))
 
