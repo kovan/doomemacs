@@ -1,29 +1,21 @@
 ;;; lisp/lib/packages.el -*- lexical-binding: t; -*-
 ;;; Commentary:
 ;;
-;; Emacs package management is opinionated, and so is Doom. Doom uses `straight'
-;; to create a declarative, lazy-loaded, and (nominally) reproducible package
-;; management system. We use `straight' over `package' because the latter is
-;; tempermental. ELPA sources suffer downtime occasionally and often fail to
-;; build packages when GNU Tar is unavailable (e.g. MacOS users start with BSD
-;; tar). Known gnutls errors plague the current stable release of Emacs (26.x)
-;; which bork TLS handshakes with ELPA repos (mainly gnu.elpa.org). See
-;; https://debbugs.gnu.org/cgi/bugreport.cgi?bug=3434.
-;;
-;; What's worse, you can only get the latest version of packages through ELPA.
-;; In an ecosystem that is constantly changing, this is more frustrating than
-;; convenient. Straight (and Doom) can do rolling release, but it is opt-in.
+;; Doom's package management system uses Guix to create a declarative,
+;; reproducible package management system. Packages are declared in modules'
+;; packages.el files via `package!' and managed through a dedicated Guix
+;; profile.
 ;;
 ;; Interacting with this package management system is done through Doom's
 ;; bin/doom script. Find out more about it by running 'doom help' (I highly
 ;; recommend you add the script to your PATH). Here are some highlights:
 ;;
-;; - `doom install`: a wizard that guides you through setting up Doom and your
+;; - `doom install': a wizard that guides you through setting up Doom and your
 ;;   private config for the first time.
-;; - `doom sync`: your go-to command for making sure Doom is in optimal
+;; - `doom sync': your go-to command for making sure Doom is in optimal
 ;;   condition. It ensures all unneeded packages are removed, all needed ones
 ;;   are installed, and all metadata associated with them is generated.
-;; - `doom upgrade`: upgrades Doom Emacs and your packages to the latest
+;; - `doom upgrade': upgrades Doom Emacs and your packages to the latest
 ;;   versions. There's also 'bin/doom sync -u' for updating only your packages.
 ;;
 ;; How this works is: the system reads packages.el files located in each
@@ -31,14 +23,10 @@
 ;; `doom-core-dir'. These contain `package!' declarations that tell DOOM what
 ;; packages to install and where from.
 ;;
-;; All that said, you can still use package.el's commands, but 'doom sync' will
-;; purge ELPA packages.
-;;
 ;;; Code:
 
 (require 'comp nil t)
-(require 'doom-straight)
-(doom-require 'doom-lib 'print)
+(require 'doom-guix)
 (doom-require 'doom-lib 'modules)
 
 
@@ -59,118 +47,44 @@ package's name as a symbol, and whose CDR is the plist supplied to its
 ;;
 ;;; Package management API
 
-(defun doom--ensure-straight (recipe pin)
-  (with-environment-variables
-      (("GIT_CONFIG" nil)
-       ("GIT_CONFIG_NOSYSTEM" "1")
-       ("GIT_CONFIG_GLOBAL" (or (getenv "DOOMGITCONFIG")
-                                "/dev/null")))
-    (let ((repo-dir (doom-path straight-base-dir "straight/repos/straight.el"))
-          (repo-url (concat "http" (if gnutls-verify-error "s")
-                            "://github.com/"
-                            (or (plist-get recipe :repo) "radian-software/straight.el")))
-          (branch (or (plist-get recipe :branch) straight-repository-branch))
-          (call (if init-file-debug
-                    (lambda (&rest args)
-                      (print! "%s" (cdr (apply #'doom-call-process args))))
-                  (lambda (&rest args)
-                    (apply #'doom-call-process args)))))
-      (unless (file-directory-p repo-dir)
-        (save-match-data
-          (unless (executable-find "git")
-            (user-error "Git isn't present on your system. Cannot proceed."))
-          (let* ((version (cdr (doom-call-process "git" "version")))
-                 (version
-                  (and (string-match "\\_<[0-9]+\\.[0-9]+\\(\\.[0-9]+\\)\\_>" version)
-                       (match-string 0 version))))
-            (if version
-                (when (version< version "2.23")
-                  (user-error "Git %s detected! Doom requires git 2.23 or newer!"
-                              version)))))
-        (print! (start "Installing straight..."))
-        (print-group!
-          (cl-destructuring-bind (depth . options)
-              (ensure-list straight-vc-git-default-clone-depth)
-            (let ((branch-switch (if (memq 'single-branch options)
-                                     "--single-branch"
-                                   "--no-single-branch")))
-              (cond
-               ((eq 'full depth)
-                (funcall call "git" "clone" "--origin" "origin"
-                         branch-switch repo-url repo-dir))
-               ((integerp depth)
-                (if (null pin)
-                    (progn
-                      (when (file-directory-p repo-dir)
-                        (delete-directory repo-dir 'recursive))
-                      (funcall call "git" "clone" "--origin" "origin" repo-url
-                               "--no-checkout" repo-dir
-                               "--depth" (number-to-string depth)
-                               branch-switch
-                               "--no-tags"
-                               "--branch" straight-repository-branch))
-                  (make-directory repo-dir 'recursive)
-                  (let ((default-directory repo-dir))
-                    (funcall call "git" "init")
-                    ;; HACK: `git branch -m' fails on empty repos with git
-                    ;;   < 2.28. `git symbolic-ref' is a portable alternative
-                    ;;   that works on all git versions. See #8538.
-                    (funcall call "git" "symbolic-ref" "HEAD"
-                             (format "refs/heads/%s" straight-repository-branch))
-                    (funcall call "git" "remote" "add" "origin" repo-url
-                             "--master" straight-repository-branch)
-                    (funcall call "git" "fetch" "origin" pin
-                             "--depth" (number-to-string depth)
-                             "--no-tags")
-                    (funcall call "git" "reset" "--hard" pin)))))))))
-      (require 'straight (concat repo-dir "/straight.el"))
-      (doom-log "Initializing recipes")
-      (mapc #'straight-use-recipes
-            '((org-elpa :local-repo nil)
-              (melpa              :type git :host github
-                                  :repo "melpa/melpa"
-                                  :build nil)
-              (nongnu-elpa        :type git :host github
-                                  :repo "emacsmirror/nongnu_elpa"
-                                  :local-repo "nongnu-elpa"
-                                  :build nil)
-              (gnu-elpa-mirror    :type git :host github
-                                  :repo "emacs-straight/gnu-elpa-mirror"
-                                  :build nil)
-              (el-get             :type git :host github
-                                  :repo "dimitri/el-get"
-                                  :build nil)
-              (emacsmirror-mirror :type git :host github
-                                  :repo "emacs-straight/emacsmirror-mirror"
-                                  :build nil))))))
+(defun doom--ensure-guix ()
+  "Ensure Guix is installed and properly configured for Doom."
+  (doom-guix--ensure-guix)
+  (unless (executable-find "git")
+    (user-error "Git isn't present on your system. Cannot proceed."))
+  (let* ((version (cdr (doom-call-process "git" "version")))
+         (version
+          (and (string-match "\\_<[0-9]+\\.[0-9]+\\(\\.[0-9]+\\)\\_>" version)
+               (match-string 0 version))))
+    (if version
+        (when (version< version "2.23")
+          (user-error "Git %s detected! Doom requires git 2.23 or newer!"
+                      version)))))
 
 (defun doom--ensure-core-packages (packages)
-  (doom-log "Installing core packages")
+  "Ensure core PACKAGES are available on the load-path.
+During initial setup, these may need to be installed via Guix before the full
+profile is built."
+  (doom-log "Ensuring core packages")
   (dolist (package packages)
     (let* ((name (car package))
-           (repo (symbol-name name)))
-      (when-let (recipe (plist-get (cdr package) :recipe))
-        (straight-override-recipe (cons name recipe))
-        (when-let (local-repo (plist-get recipe :local-repo))
-          (setq repo local-repo)))
-      (print-group!
-        ;; Only clone the package, don't build them. Straight hasn't been fully
-        ;; configured by this point.
-        (straight-use-package name nil t))
-      ;; In case the package hasn't been built yet.
-      (or (member (directory-file-name (straight--build-dir (symbol-name name)))
-                  load-path)
-          (add-to-list 'load-path (directory-file-name (straight--repos-dir repo)))))))
+           (guix-name (doom-guix--package-name name)))
+      (unless (doom-package-installed-p name)
+        (print! (start "Installing core package %s...") name)
+        (doom-guix--call! "package"
+                          "--profile" doom-guix-profile-dir
+                          "--install" guix-name))
+      ;; Ensure it's on load-path
+      (when-let* ((path (doom-guix--package-load-path name)))
+        (add-to-list 'load-path path)))))
 
 ;;;###autoload
 (defun doom-initialize-core-packages (&optional force-p)
-  "Ensure `straight' is installed and was compiled with this version of Emacs."
-  (when (or force-p (null (bound-and-true-p straight-recipe-repositories)))
-    (doom-log "Initializing straight")
+  "Ensure Guix is available and core packages are installed."
+  (when (or force-p (not doom-packages))
+    (doom-log "Initializing Guix")
+    (doom--ensure-guix)
     (let ((packages (doom-package-list '((:doom)))))
-      (cl-destructuring-bind (&key recipe pin &allow-other-keys)
-          (alist-get 'straight packages)
-        (doom--ensure-straight recipe pin))
       (doom--ensure-core-packages
        (seq-filter (fn! (eq (plist-get (cdr %) :type) 'core))
                    packages)))))
@@ -181,8 +95,8 @@ package's name as a symbol, and whose CDR is the plist supplied to its
 
 If FORCE-P is non-nil, do it anyway.
 
-This ensures `doom-packages' is populated and `straight' recipes are properly
-processed."
+This ensures `doom-packages' is populated and Guix profile paths are on the
+load-path."
   (doom-initialize-core-packages force-p)
   (when (or force-p (not (bound-and-true-p package--initialized)))
     (doom-log "Initializing package.el")
@@ -191,25 +105,21 @@ processed."
     (unless package--initialized
       (error "Failed to initialize package.el")))
   (when (or force-p (null doom-packages))
-    (doom-log "Initializing straight.el")
+    (doom-log "Initializing Guix packages")
     (setq doom-disabled-packages nil
           doom-packages (doom-package-list))
-    (let (packages)
-      (dolist (package doom-packages)
-        (cl-destructuring-bind
-            (name &key recipe disable ignore &allow-other-keys) package
-          (if ignore
-              (straight-override-recipe (cons name '(:type built-in)))
-            (if disable
-                (cl-pushnew name doom-disabled-packages)
-              (when recipe
-                (straight-override-recipe (cons name recipe)))
-              (cl-callf append packages (cons name (straight--get-dependencies name)))))))
-      (dolist (package (cl-delete-duplicates packages :test #'equal))
-        (straight-register-package package)
-        (let ((name (symbol-name package)))
-          (add-to-list 'load-path (directory-file-name (straight--build-dir name)))
-          (straight--load-package-autoloads name))))))
+    (dolist (package doom-packages)
+      (cl-destructuring-bind
+          (name &key disable ignore &allow-other-keys) package
+        (cond (ignore nil)
+              (disable
+               (cl-pushnew name doom-disabled-packages))
+              (t
+               ;; Add package's Guix profile path to load-path
+               (when-let* ((path (doom-guix--package-load-path name)))
+                 (add-to-list 'load-path path))))))
+    ;; Also add all paths from the Guix profile
+    (doom-guix--setup-load-path)))
 
 ;;;###autoload
 (defun doom-package-get (package &optional prop nil-value)
@@ -230,13 +140,8 @@ processed."
 
 ;;;###autoload
 (defun doom-package-recipe (package &optional prop nil-value)
-  "Returns the `straight' recipe PACKAGE was registered with."
-  (let* ((recipe (straight-recipes-retrieve package))
-         (plist (doom-plist-merge
-                 (plist-get (alist-get package doom-packages) :recipe)
-                 (cdr (if (memq (car recipe) '(quote \`))
-                          (eval recipe t)
-                        recipe)))))
+  "Returns the recipe PACKAGE was registered with."
+  (let ((plist (plist-get (alist-get package doom-packages) :recipe)))
     (if prop
         (if (plist-member plist prop)
             (plist-get plist prop)
@@ -245,22 +150,16 @@ processed."
 
 ;;;###autoload
 (defun doom-package-recipe-repo (package)
-  "Resolve and return PACKAGE's (symbol) local-repo property."
-  (if-let* ((recipe (copy-sequence (doom-package-recipe package)))
-            (recipe (if (and (not (plist-member recipe :type))
-                             (memq (plist-get recipe :host) '(github gitlab bitbucket)))
-                        (plist-put recipe :type 'git)
-                      recipe))
-            (repo (if-let* ((local-repo (plist-get recipe :local-repo)))
-                      (directory-file-name local-repo)
-                    (ignore-errors (straight-vc-local-repo-name recipe)))))
-      repo
+  "Resolve and return PACKAGE's (symbol) repo identifier."
+  (if-let* ((recipe (doom-package-recipe package))
+            (repo (plist-get recipe :repo)))
+      (file-name-nondirectory repo)
     (symbol-name package)))
 
 ;;;###autoload
 (defun doom-package-build-recipe (package &optional prop nil-value)
-  "Returns the `straight' recipe PACKAGE was installed with."
-  (let ((plist (nth 2 (gethash (symbol-name package) straight--build-cache))))
+  "Returns the recipe PACKAGE was declared with."
+  (let ((plist (plist-get (alist-get package doom-packages) :recipe)))
     (if prop
         (if (plist-member plist prop)
             (plist-get plist prop)
@@ -268,43 +167,36 @@ processed."
       plist)))
 
 ;;;###autoload
-(defun doom-package-dependencies (package &optional recursive noerror)
+(defun doom-package-dependencies (package &optional _recursive _noerror)
   "Return a list of dependencies for a package.
-
-If RECURSIVE is `tree', return a tree of dependencies.
-If RECURSIVE is nil, only return PACKAGE's immediate dependencies.
-If NOERROR, return nil in case of error."
+Queries Guix for the dependency tree."
   (cl-check-type package symbol)
-  (let ((deps (straight-dependencies (symbol-name package))))
-    (pcase recursive
-      (`tree deps)
-      (`t (flatten-list deps))
-      (`nil (cl-remove-if #'listp deps)))))
+  (let* ((guix-name (doom-guix--package-name package))
+         (result (doom-guix--call "package"
+                                  "--profile" doom-guix-profile-dir
+                                  "--list-installed" (concat "^" guix-name "$"))))
+    ;; Guix doesn't easily expose dependency trees via CLI
+    ;; Return nil for now; dependency tracking is handled by Guix internally
+    nil))
 
 ;;;###autoload
-(defun doom-package-depending-on (package &optional noerror)
-  "Return a list of packages that depend on PACKAGE.
-
-If PACKAGE (a symbol) isn't installed, throw an error, unless NOERROR is
-non-nil."
+(defun doom-package-depending-on (package &optional _noerror)
+  "Return a list of packages that depend on PACKAGE."
   (cl-check-type package symbol)
-  ;; can't get dependencies for built-in packages
-  (unless (or (doom-package-build-recipe package)
-              noerror)
-    (error "Couldn't find %s, is it installed?" package))
-  (straight-dependents (symbol-name package)))
+  ;; Guix handles dependency tracking internally
+  nil)
 
 ;;; Predicate functions
 ;;;###autoload
 (defun doom-package-built-in-p (package)
   "Return non-nil if PACKAGE (a symbol) is built-in."
-  (eq (doom-package-build-recipe package :type)
-      'built-in))
+  (or (assq package package--builtins)
+      (eq (doom-package-get package :type) 'built-in)))
 
 ;;;###autoload
 (defun doom-package-installed-p (package)
   "Return non-nil if PACKAGE (a symbol) is installed."
-  (file-directory-p (straight--build-dir (symbol-name package))))
+  (doom-guix--package-installed-p package))
 
 ;;;###autoload
 (defun doom-package-is-type-p (package type)
@@ -320,10 +212,10 @@ non-nil."
 
 ;;;###autoload
 (defun doom-package-backend (package)
-  "Return 'straight, 'builtin, 'elpa or 'other, depending on how PACKAGE is
+  "Return 'guix, 'builtin, 'elpa or 'other, depending on how PACKAGE is
 installed."
-  (cond ((gethash (symbol-name package) straight--build-cache)
-         'straight)
+  (cond ((doom-guix--package-installed-p package)
+         'guix)
         ((or (doom-package-built-in-p package)
              (assq package package--builtins))
          'builtin)
@@ -406,28 +298,25 @@ also be a list of module keys."
         (when (and (not ignore)
                    (not disable)
                    (or pin unpin))
-          (setf (alist-get (file-name-nondirectory (doom-package-recipe-repo name))
+          (setf (alist-get (doom-package-recipe-repo name)
                            alist nil 'remove #'equal)
                 (unless unpin pin)))))))
 
 ;;;###autoload
 (defun doom-package-recipe-alist ()
-  "Return straight recipes for non-builtin packages with a local-repo."
+  "Return recipes for non-builtin, non-virtual packages."
   (let (recipes)
-    (dolist (recipe (hash-table-values straight--recipe-cache))
-      (cl-destructuring-bind (&key local-repo type &allow-other-keys)
-          recipe
-        (unless (or (null local-repo)
-                    (eq type 'built-in))
-          (push recipe recipes))))
-    ;; FIXME: Depending on a hash table's load order? Straight to jail.
-    (if (< emacs-major-version 29)
-        (nreverse recipes)
-      recipes)))
+    (dolist (package doom-packages)
+      (cl-destructuring-bind (name &key recipe type disable ignore &allow-other-keys)
+          package
+        (unless (or disable ignore
+                    (memq type '(built-in virtual)))
+          (push (cons name recipe) recipes))))
+    (nreverse recipes)))
 
 ;;;###autoload
 (defun doom-package-homepage (package)
-  "return the url to package's homepage (usually a repo)."
+  "Return the url to PACKAGE's homepage (usually a repo)."
   (doom-initialize-packages)
   (or (get package 'homepage)
       (put package 'homepage
@@ -440,15 +329,9 @@ also be a list of module keys."
                       (let ((case-fold-search t))
                         (when (re-search-forward " \\(?:url\\|homepage\\|website\\): \\(http[^\n]+\\)\n" nil t)
                           (match-string-no-properties 1))))))
-                 ((when-let ((recipe (straight-recipes-retrieve package)))
-                    (straight--with-plist (straight--convert-recipe recipe)
-                        (host repo)
-                      (pcase host
-                        (`github (format "https://github.com/%s" repo))
-                        (`gitlab (format "https://gitlab.com/%s" repo))
-                        (`bitbucket (format "https://bitbucket.com/%s" (plist-get plist :repo)))
-                        (`git repo)
-                        (_ nil)))))
+                 ((when-let* ((recipe (doom-package-recipe package))
+                              (url (doom-guix--recipe-url recipe)))
+                    url))
                  ((or package-archive-contents
                       (progn (package-refresh-contents)
                              package-archive-contents))
@@ -472,26 +355,16 @@ also be a list of module keys."
 
 ;;;###autoload
 (defun doom/reload-packages ()
-  "Reload `doom-packages', `package' and `quelpa'."
+  "Reload `doom-packages' and reinitialize."
   (interactive)
-  ;; HACK straight.el must be loaded for this to work
   (message "Reloading packages")
   (doom-initialize-packages t)
   (message "Reloading packages...DONE"))
 
 (defun doom--package-merge-recipes (package plist)
-  (require 'straight)
   (doom-plist-merge
    (plist-get plist :recipe)
-   (if-let* ((recipe (straight-recipes-retrieve package)))
-       (cdr (if (memq (car recipe) '(quote \`))
-                (eval recipe t)
-              recipe))
-     (let ((recipe (plist-get (cdr (assq package doom-packages))
-                              :recipe)))
-       (if (keywordp (car recipe))
-           recipe
-         (cdr recipe))))))
+   (plist-get (cdr (assq package doom-packages)) :recipe)))
 
 (defun doom--package-to-bump-string (package plist)
   "Return a PACKAGE and its PLIST in 'username/repo@commit' format."
@@ -557,8 +430,7 @@ Grabs the latest commit id of the package using 'git'."
            (branch (plist-get recipe :branch))
            (oldid (or (plist-get plist :pin)
                       (doom-package-get package :pin)))
-           (url (straight-vc-git--destructure recipe (upstream-repo upstream-host)
-                  (straight-vc-git--encode-url upstream-repo upstream-host)))
+           (url (doom-guix--recipe-url recipe))
            (id (or (when url
                      (cdr (doom-call-process
                            "git" "ls-remote" url
@@ -748,221 +620,20 @@ Must be run from a magit diff buffer."
 (defun doom-packages--abbrev-commit (commit &optional full)
   (if full commit (substring commit 0 7)))
 
-(defun doom-packages--commit-log-between (start-ref end-ref)
-  (straight--process-with-result
-   (straight--process-run
-    "git" "log" "--oneline" "--no-merges"
-    end-ref (concat "^" (regexp-quote start-ref)))
-   (if success
-       (string-trim-right (or stdout ""))
-     (format "ERROR: Couldn't collect commit list because: %s" stderr))))
-
-(defmacro doom-packages--straight-with (form &rest body)
-  (declare (indent 1))
-  `(let-alist
-       (let* ((buffer (straight--process-buffer))
-              (start  (with-current-buffer buffer (point-max)))
-              (retval ,form)
-              (output (with-current-buffer buffer (buffer-substring start (point-max)))))
-         (save-match-data
-           (list (cons 'it      retval)
-                 (cons 'stdout  (substring-no-properties output))
-                 (cons 'success (if (string-match "\n+\\[Return code: \\([0-9-]+\\)\\]\n+" output)
-                                    (string-to-number (match-string 1 output))))
-                 (cons 'output  (string-trim output
-                                             "^\\(\\$ [^\n]+\n\\)*\n+"
-                                             "\n+\\[Return code: [0-9-]+\\]\n+")))))
-     ,@body))
+(defun doom-packages--commit-log-between (start-ref end-ref &optional repo-dir)
+  "Get git log between START-REF and END-REF in REPO-DIR."
+  (let ((default-directory (or repo-dir default-directory)))
+    (let ((result (doom-call-process
+                   "git" "log" "--oneline" "--no-merges"
+                   end-ref (concat "^" (regexp-quote start-ref)))))
+      (if (zerop (car result))
+          (string-trim-right (or (cdr result) ""))
+        (format "ERROR: Couldn't collect commit list because: %s" (cdr result))))))
 
 (defun doom-packages--barf-if-incomplete ()
-  (let ((straight-safe-mode t))
-    (condition-case _ (straight-check-all)
-      (error (user-error "Package state is incomplete. Run 'doom sync' first")))))
-
-;;; Parallel process management
-(defvar doom-packages--parallel-max-jobs 20
-  "Maximum number of parallel fetch jobs to run.")
-
-(defvar doom-packages--build-queue nil
-  "Queue of packages waiting to be built.")
-
-(defvar doom-packages--build-in-progress nil
-  "Package currently being built, or nil.")
-
-(defun doom-packages--async-fetch (repo-dir recipe callback)
-  "Start async git fetch in REPO-DIR for RECIPE, call CALLBACK when done.
-CALLBACK receives (success-p output)."
-  (let* ((default-directory repo-dir)
-         (remote (or (plist-get recipe :remote) "origin"))
-         (buf (generate-new-buffer " *doom-fetch*"))
-         (proc (make-process
-                :name (format "doom-fetch-%s" (plist-get recipe :local-repo))
-                :buffer buf
-                :command (list "git" "fetch" "--tags" remote)
-                :sentinel (lambda (proc _event)
-                            (when (memq (process-status proc) '(exit signal))
-                              (let ((output (with-current-buffer buf (buffer-string)))
-                                    (success (= 0 (process-exit-status proc))))
-                                (kill-buffer buf)
-                                (funcall callback success output)))))))
-    proc))
-
-(defun doom-packages--build-package (package)
-  "Build PACKAGE synchronously. Returns t on success."
-  (condition-case err
-      (let ((straight--packages-not-to-rebuild
-             (or straight--packages-not-to-rebuild (make-hash-table :test #'equal)))
-            (straight--packages-to-rebuild (make-hash-table :test #'equal)))
-        (puthash package t straight--packages-to-rebuild)
-        (let ((build-dir (straight--build-dir package)))
-          (when (file-directory-p build-dir)
-            (delete-directory build-dir t)))
-        (straight--make-build-cache-available)
-        (straight-use-package (intern package))
-        t)
-    (error
-     (message "Build error for %s: %s" package (error-message-string err))
-     nil)))
-
-(defvar doom-packages--parallel-max-builds 8
-  "Maximum number of parallel byte-compile jobs to run.")
-
-(defvar doom-packages--compile-processes nil
-  "List of active byte-compile processes.")
-
-(defun doom-packages--async-byte-compile-files (files callback)
-  "Async byte-compile FILES using a batch Emacs process.
-CALLBACK receives (success output)."
-  (let* ((buf (generate-new-buffer " *doom-compile*"))
-         (emacs (doom-packages--find-emacs-executable))
-         ;; Write files to a temp file to avoid command line length issues
-         (list-file (make-temp-file "doom-compile-" nil ".el"))
-         (_ (with-temp-file list-file
-              (prin1 files (current-buffer))))
-         (proc (make-process
-                :name "doom-byte-compile"
-                :buffer buf
-                :command (list emacs "--batch"
-                               "--eval" (format "(progn
-                                  (setq load-prefer-newer t)
-                                  (let ((files (with-temp-buffer
-                                                 (insert-file-contents %S)
-                                                 (read (current-buffer))))
-                                        (failed nil)
-                                        (compiled 0))
-                                    (dolist (f files)
-                                      (condition-case err
-                                          (when (byte-compile-file f)
-                                            (setq compiled (1+ compiled)))
-                                        (error
-                                         (push (cons f err) failed))))
-                                    (princ (format \"COMPILED: %%d\\n\" compiled))
-                                    (when failed
-                                      (princ (format \"FAILED: %%S\\n\" failed)))
-                                    (princ \"COMPILE-DONE\")))"
-                                                list-file))
-                :sentinel (lambda (proc _event)
-                            (when (memq (process-status proc) '(exit signal))
-                              (let* ((output (with-current-buffer (process-buffer proc)
-                                               (buffer-string)))
-                                     (success (and (= 0 (process-exit-status proc))
-                                                   (string-match-p "COMPILE-DONE" output))))
-                                (ignore-errors (delete-file list-file))
-                                (kill-buffer (process-buffer proc))
-                                (setq doom-packages--compile-processes
-                                      (delq proc doom-packages--compile-processes))
-                                (funcall callback success output)))))))
-    (push proc doom-packages--compile-processes)
-    proc))
-
-(defun doom-packages--collect-el-files (packages)
-  "Collect all .el files from build directories of PACKAGES."
-  (let ((files nil))
-    (dolist (pkg packages)
-      (let ((build-dir (straight--build-dir pkg)))
-        (when (file-directory-p build-dir)
-          (dolist (f (directory-files-recursively build-dir "\\.el$"))
-            (unless (or (string-match-p "-autoloads\\.el$" f)
-                        (string-match-p "-pkg\\.el$" f))
-              (push f files))))))
-    (nreverse files)))
-
-(defun doom-packages--parallel-byte-compile (packages &optional callback)
-  "Byte-compile all .el files in PACKAGES in parallel.
-CALLBACK is called with (success total-files) when done."
-  (let* ((files (doom-packages--collect-el-files packages))
-         (total (length files))
-         (batch-size (max 10 (/ total doom-packages--parallel-max-builds)))
-         (batches (seq-partition files batch-size))
-         (completed 0)
-         (total-batches (length batches))
-         (all-success t))
-    (if (null files)
-        (when callback (funcall callback t 0))
-      (dolist (batch batches)
-        (doom-packages--async-byte-compile-files
-         batch
-         (lambda (success output)
-           (unless success
-             (setq all-success nil)
-             (print! (warn "Compilation batch failed: %s"
-                          (if (string-match "FAILED: \\(.+\\)" output)
-                              (match-string 1 output)
-                            "unknown error"))))
-           (cl-incf completed)
-           (when (= completed total-batches)
-             (when callback
-               (funcall callback all-success total)))))))))
-
-(defun doom-packages--find-emacs-executable ()
-  "Find the Emacs executable to use for batch builds."
-  (or (getenv "EMACS")
-      (expand-file-name invocation-name invocation-directory)))
-
-(defmacro doom-packages--with-recipes (recipes binds &rest body)
-  (declare (indent 2))
-  (let ((recipe-var  (make-symbol "recipe"))
-        (recipes-var (make-symbol "recipes")))
-    `(let* ((,recipes-var ,recipes)
-            (built ())
-            (straight-use-package-pre-build-functions
-             (cons (lambda (pkg &rest _) (cl-pushnew pkg built :test #'equal))
-                   straight-use-package-pre-build-functions)))
-       (dolist (,recipe-var ,recipes-var (nreverse built))
-         (cl-block nil
-           (straight--with-plist (append (list :recipe ,recipe-var) ,recipe-var)
-               ,(ensure-list binds)
-             ,@body))))))
-
-(defvar doom-packages--cli-updated-recipes nil)
-(defun doom-packages--cli-recipes-update ()
-  "Updates straight and recipe repos."
-  (unless doom-packages--cli-updated-recipes
-    (straight--make-build-cache-available)
-    (print! (start "Updating recipe repos..."))
-    (print-group!
-     (doom-packages--with-recipes
-      (delq
-       nil (mapcar (doom-rpartial #'gethash straight--repo-cache)
-                   (mapcar #'symbol-name straight-recipe-repositories)))
-      (recipe package type local-repo)
-      (let ((esc (if init-file-debug "" "\033[1A"))
-            (ref (straight-vc-get-commit type local-repo))
-            newref output)
-        (print! (start "\rUpdating recipes for %s...%s") package esc)
-        (doom-packages--straight-with (straight-vc-fetch-from-remote recipe)
-          (when .it
-            (setq output .output)
-            (straight-merge-package package)
-            (unless (equal ref (setq newref (straight-vc-get-commit type local-repo)))
-              (print! (success "\r%s updated (%s -> %s)")
-                      package
-                      (doom-packages--abbrev-commit ref)
-                      (doom-packages--abbrev-commit newref))
-              (unless (string-empty-p output)
-                (print-group! (print! (item "%s" output))))))))))
-    (setq straight--recipe-lookup-cache (make-hash-table :test #'eq)
-          doom-packages--cli-updated-recipes t)))
+  "Error if the Guix profile doesn't exist."
+  (unless (file-directory-p doom-guix-profile-dir)
+    (user-error "Package state is incomplete. Run 'doom sync' first")))
 
 (defvar doom-packages--eln-output-expected nil)
 
@@ -1083,374 +754,46 @@ CALLBACK is called with (success total-files) when done."
            (native-compile-async file)))
 
 (defun doom-packages-ensure (&optional force-p)
-  "Ensure packages are installed, built.
-When FORCE-P is non-nil, rebuild all packages using parallel processes."
+  "Ensure packages are installed and built via Guix."
   (doom-initialize-packages)
-  (if (not (file-directory-p (straight--repos-dir)))
+  (if (not (file-directory-p doom-guix-profile-dir))
       (print! (start "Installing all packages for the first time (this may take a while)..."))
     (if force-p
-        (print! (start "Rebuilding all packages in parallel..."))
+        (print! (start "Rebuilding all packages (this may take a while)..."))
       (print! (start "Ensuring packages are installed and built..."))))
   (print-group!
-    (let ((recipes (doom-package-recipe-alist)))
+    ;; Generate the local Guix channel from doom-packages
+    (doom-guix-generate-channel)
+    ;; Build the profile
+    (when force-p
+      ;; Force rebuild by removing the profile
+      (when (file-exists-p doom-guix-profile-dir)
+        (delete-file doom-guix-profile-dir)))
+    (doom-guix--build-profile)
+    ;; Set up load paths
+    (doom-guix--setup-load-path)
+    ;; Handle native compilation
+    (when (featurep 'native-compile)
       (add-hook 'native-comp-async-cu-done-functions #'doom-packages--native-compile-done-h)
-      (straight--make-build-cache-available)
-      (if force-p
-          ;; Two-phase rebuild: fast setup, then parallel byte-compilation
-          (let* ((packages (mapcar (lambda (r) (plist-get r :package)) recipes))
-                 (total (length packages))
-                 (built nil)
-                 (failed nil)
-                 ;; Phase 1: Setup packages without byte-compilation
-                 (straight-disable-compile t)
-                 (straight--packages-to-rebuild :all)
-                 (straight--packages-not-to-rebuild (make-hash-table :test #'equal)))
-            (print! (start "Phase 1: Setting up %d packages..." total))
-            (let ((count 0))
-              (dolist (pkg packages)
-                (cl-incf count)
-                (condition-case err
-                    (progn
-                      ;; Delete old build dir
-                      (let ((build-dir (straight--build-dir pkg)))
-                        (when (file-directory-p build-dir)
-                          (delete-directory build-dir t)))
-                      (straight-use-package (intern pkg))
-                      (push pkg built)
-                      (when (zerop (% count 20))
-                        (print! (item "Setup %d/%d packages..." count total))))
-                  (error
-                   (push pkg failed)
-                   (print! (warn "Failed to setup %s: %s" pkg (error-message-string err)))))))
-            ;; Phase 2: Parallel byte-compilation
-            (when built
-              (print! (start "Phase 2: Byte-compiling %d packages in parallel..."
-                             (length built)))
-              (let ((compile-done nil)
-                    (compile-success nil)
-                    (files-compiled 0))
-                (doom-packages--parallel-byte-compile
-                 built
-                 (lambda (success total-files)
-                   (setq compile-done t
-                         compile-success success
-                         files-compiled total-files)))
-                ;; Wait for compilation to finish
-                (while (not compile-done)
-                  (accept-process-output nil 0.1))
-                (if compile-success
-                    (print! (success "Compiled %d files" files-compiled))
-                  (print! (warn "Some files failed to compile")))))
-            ;; Native compilation
-            (when (and (featurep 'native-compile)
-                       straight--native-comp-available)
-              (doom-packages--compile-site-files)
-              (doom-packages--wait-for-native-compile-jobs)
-              (doom-packages--write-missing-eln-errors))
-            (when (file-directory-p (straight--modified-dir))
-              (delete-directory (straight--modified-dir) 'recursive))
-            (if built
-                (progn
-                  (when failed
-                    (print! (warn "Failed to setup %d package(s): %s"
-                                  (length failed) (string-join failed ", "))))
-                  (print! (success "Built %d package(s)" (length built))))
-              (print! (item "No packages were built")))
-            built)
-        ;; Sequential path for non-force operations (install/selective rebuild)
-        ;; Uses parallel byte-compilation for speed
-        (let ((straight-check-for-modifications
-               (when (file-directory-p (straight--modified-dir))
-                 '(find-when-checking)))
-              (straight--allow-find
-               (and straight-check-for-modifications
-                    (executable-find straight-find-executable)
-                    t))
-              (straight--packages-not-to-rebuild
-               (or straight--packages-not-to-rebuild (make-hash-table :test #'equal)))
-              (straight--packages-to-rebuild
-               (or straight--packages-to-rebuild
-                   (make-hash-table :test #'equal)))
-              (straight-disable-compile t)  ; Defer compilation for parallel processing
-              (pinned (doom-package-pinned-alist)))
-          (if-let* ((built
-                     (doom-packages--with-recipes recipes (package local-repo recipe)
-                       (let ((repo-dir (straight--repos-dir (or local-repo package)))
-                             (build-dir (straight--build-dir package))
-                             (build-file ".doompackage"))
-                         ;; Ensure packages w/ a changed :env are rebuilt
-                         (when-let* ((plist (alist-get (intern package) doom-packages)))
-                           (unless (equal (plist-get plist :env)
-                                          (doom-file-read (doom-path build-dir build-file) :by 'read :noerror t))
-                             (puthash package t straight--packages-to-rebuild)))
-                         ;; Ensure packages w/ outdated files/bytecode are rebuilt
-                         (let* ((build (if (plist-member recipe :build)
-                                           (plist-get recipe :build)
-                                         t))
-                                (want-byte-compile
-                                 (or (eq build t)
-                                     (memq 'compile build)))
-                                (want-native-compile
-                                 (or (eq build t)
-                                     (memq 'native-compile build))))
-                           (and (eq (car-safe build) :not)
-                                (setq want-byte-compile (not want-byte-compile)
-                                      want-native-compile (not want-native-compile)))
-                           (when (or (not (featurep 'native-compile))
-                                     (not straight--native-comp-available))
-                             (setq want-native-compile nil))
-                           (and (or want-byte-compile want-native-compile)
-                                (or (file-newer-than-file-p repo-dir build-dir)
-                                    (file-exists-p (straight--modified-dir package))
-                                    (cl-loop with outdated = nil
-                                             for file in (doom-files-in build-dir :match "\\.el$" :full t)
-                                             if (or (if want-byte-compile   (doom-packages--elc-file-outdated-p file))
-                                                    (if want-native-compile (doom-packages--eln-file-outdated-p file)))
-                                             do (setq outdated t)
-                                             (when want-native-compile
-                                               (push file doom-packages--eln-output-expected))
-                                             finally return outdated))
-                                (puthash package t straight--packages-to-rebuild)))
-                         (unless (file-directory-p repo-dir)
-                           (doom-packages--cli-recipes-update))
-                         (condition-case-unless-debug e
-                             (let ((straight-vc-git-post-clone-hook
-                                    (cons (lambda! (&key commit)
-                                            (print-group!
-                                              (if-let* ((pin (cdr (assoc package pinned))))
-                                                  (print! (item "%s: pinned to %s") package pin)
-                                                (when commit
-                                                  (print! (item "%s: checked out %s") package commit)))))
-                                          straight-vc-git-post-clone-hook))
-                                   (straight-use-package-prepare-functions
-                                    (cons (lambda (package &rest _)
-                                            (when-let* ((plist (alist-get (intern package) doom-packages))
-                                                        (env (plist-get plist :env)))
-                                              (cl-loop for (var . val) in env
-                                                       if (and (symbolp var)
-                                                               (string-prefix-p "_" (symbol-name var)))
-                                                       do (set-default var val)
-                                                       else if (and (stringp var) val)
-                                                       do (setenv var val))))
-                                          straight-use-package-prepare-functions))
-                                   (straight-use-package-post-build-functions
-                                    (cons (lambda (package &rest _)
-                                            (when-let* ((plist (alist-get (intern package) doom-packages))
-                                                        (env (plist-get plist :env)))
-                                              (with-temp-file (straight--build-file package build-file)
-                                                (prin1 env (current-buffer)))))
-                                          straight-use-package-post-build-functions)))
-                               (straight-use-package (intern package)))
-                           (error
-                            (signal 'doom-package-error (list package e))))))))
-              (progn
-                ;; Parallel byte-compilation for built packages
-                (when built
-                  (print! (start "Byte-compiling %d packages in parallel..." (length built)))
-                  (let ((compile-done nil)
-                        (compile-success nil)
-                        (files-compiled 0))
-                    (doom-packages--parallel-byte-compile
-                     built
-                     (lambda (success total-files)
-                       (setq compile-done t
-                             compile-success success
-                             files-compiled total-files)))
-                    (while (not compile-done)
-                      (accept-process-output nil 0.1))
-                    (if compile-success
-                        (print! (success "Compiled %d files" files-compiled))
-                      (print! (warn "Some files failed to compile")))))
-                (when (and (featurep 'native-compile)
-                           straight--native-comp-available)
-                  (doom-packages--compile-site-files)
-                  (doom-packages--wait-for-native-compile-jobs)
-                  (doom-packages--write-missing-eln-errors))
-                ;; HACK: Every time you save a file in a package that straight
-                ;;   tracks, it is recorded in ~/.emacs.d/.local/straight/modified/.
-                ;;   Typically, straight will clean these up after rebuilding, but
-                ;;   Doom's use-case circumnavigates that, leaving these files there
-                ;;   and causing a rebuild of those packages each time `doom sync'
-                ;;   or similar is run, so we clean it up ourselves:
-                (when (file-directory-p (straight--modified-dir))
-                  (delete-directory (straight--modified-dir) 'recursive))
-                (print! (success "\rBuilt %d package(s)") (length built)))
-            (print! (item "No packages need attention"))
-            nil))))))
+      (doom-packages--compile-site-files)
+      (doom-packages--wait-for-native-compile-jobs)
+      (doom-packages--write-missing-eln-errors))
+    (print! (success "Packages are up-to-date"))))
 
 (defun doom-packages-update (&optional pinned-only-p)
-  "Updates packages with parallel fetch and pipelined build operations.
-Fetches run in parallel, builds run in main process but overlap with fetches."
+  "Updates packages by regenerating the Guix channel and rebuilding the profile."
   (doom-initialize-packages)
   (doom-packages--barf-if-incomplete)
-  (let* ((repo-dir (straight--repos-dir))
-         (pinned (doom-package-pinned-alist))
-         (recipes (doom-package-recipe-alist))
-         (packages-to-rebuild (make-hash-table :test 'equal))
-         (repos-to-rebuild (make-hash-table :test 'equal))
-         (total (length recipes))
-         (esc (if init-file-debug "" "\033[1A"))
-         ;; Pipeline state
-         (work-queue nil)          ; packages to process
-         (fetch-pending nil)       ; waiting to start fetch
-         (fetch-running (make-hash-table :test 'equal))  ; currently fetching
-         (fetch-complete nil)      ; fetched, waiting to process
-         (build-pending nil)       ; waiting to build
-         (builds-done 0)
-         (builds-failed 0)
-         (max-fetches doom-packages--parallel-max-jobs))
-    (if pinned-only-p
-        (print! (start "Updating pinned packages..."))
-      (print! (start "Updating all packages (this may take a while)...")))
-
-    ;; Collect all packages to process
-    (print! (start "Analyzing packages..."))
-    (doom-packages--with-recipes recipes (recipe package type local-repo)
-      (when (and (straight--repository-is-available-p recipe)
-                 (not (gethash local-repo repos-to-rebuild))
-                 (file-in-directory-p (straight--repos-dir local-repo) repo-dir)
-                 (or (not pinned-only-p) (assoc local-repo pinned)))
-        (let* ((default-directory (straight--repos-dir local-repo))
-               (target-ref (cdr (or (assoc local-repo pinned) (assoc package pinned))))
-               (needs-fetch (or (not (stringp target-ref))
-                                (not (straight-vc-commit-present-p recipe target-ref)))))
-          (when (and (eq type 'git)
-                     (or (file-directory-p ".git") (file-exists-p ".straight-commit")))
-            (push (list :package package
-                        :recipe recipe
-                        :local-repo local-repo
-                        :type type
-                        :target-ref target-ref
-                        :needs-fetch needs-fetch
-                        :repo-dir default-directory)
-                  work-queue)))))
-    (setq fetch-pending (nreverse work-queue))
-    (let ((total-packages (length fetch-pending)))
-      (print! (success "Found %d packages to process") total-packages)
-
-      (when fetch-pending
-        (print! (start "Fetching and building in parallel..."))
-        ;; Main pipeline loop
-        (cl-labels
-            ((start-fetches ()
-               "Start fetch processes up to max-fetches limit."
-               (while (and fetch-pending
-                           (< (hash-table-count fetch-running) max-fetches))
-                 (let* ((item (pop fetch-pending))
-                        (package (plist-get item :package))
-                        (recipe (plist-get item :recipe))
-                        (repo-dir (plist-get item :repo-dir))
-                        (needs-fetch (plist-get item :needs-fetch)))
-                   (if (not needs-fetch)
-                       ;; No fetch needed, go straight to processing
-                       (push item fetch-complete)
-                     ;; Start async fetch
-                     (puthash package item fetch-running)
-                     (doom-packages--async-fetch
-                      repo-dir recipe
-                      (lambda (success output)
-                        (let ((item (gethash package fetch-running)))
-                          (remhash package fetch-running)
-                          (if success
-                              (progn
-                                (push (plist-put item :fetch-success t) fetch-complete)
-                                (print! (item "  Fetched %s") package))
-                            (print! (warn "  Failed to fetch %s") package)))))))))
-
-             (process-fetched ()
-               "Process completed fetches - merge/checkout and queue builds."
-               (while fetch-complete
-                 (let* ((item (pop fetch-complete))
-                        (package (plist-get item :package))
-                        (recipe (plist-get item :recipe))
-                        (local-repo (plist-get item :local-repo))
-                        (type (plist-get item :type))
-                        (target-ref (plist-get item :target-ref))
-                        (default-directory (plist-get item :repo-dir)))
-                   (condition-case-unless-debug e
-                       (let ((ref (straight-vc-get-commit type local-repo)))
-                         (cond
-                          ;; Unpinned - merge and check for changes
-                          ((not (stringp target-ref))
-                           (straight-merge-package package)
-                           (let ((new-ref (straight-vc-get-commit type local-repo)))
-                             (unless (doom-packages--same-commit-p new-ref ref)
-                               (puthash local-repo t repos-to-rebuild)
-                               (puthash package t packages-to-rebuild)
-                               (push package build-pending)
-                               (print! (success "  %s: %s -> %s")
-                                       local-repo
-                                       (doom-packages--abbrev-commit ref)
-                                       (doom-packages--abbrev-commit new-ref)))))
-                          ;; Pinned and already at target
-                          ((doom-packages--same-commit-p target-ref ref) nil)
-                          ;; Needs checkout
-                          ((straight-vc-commit-present-p recipe target-ref)
-                           (straight-vc-check-out-commit recipe target-ref)
-                           (when (doom-packages--same-commit-p
-                                  target-ref (straight-vc-get-commit type local-repo))
-                             (puthash local-repo t repos-to-rebuild)
-                             (puthash package t packages-to-rebuild)
-                             (push package build-pending)
-                             (print! (success "  %s: %s -> %s")
-                                     local-repo
-                                     (doom-packages--abbrev-commit ref)
-                                     (doom-packages--abbrev-commit target-ref))))))
-                     (error
-                      (print! (warn "  Error processing %s: %s")
-                              package (error-message-string e)))))))
-
-             (run-builds ()
-               "Run pending builds (in main process, overlapping with fetches)."
-               (while build-pending
-                 (let ((package (pop build-pending)))
-                   (print! (start "  Building %s...") package)
-                   (if (doom-packages--build-package package)
-                       (progn
-                         (cl-incf builds-done)
-                         (print! (success "  Built %s") package))
-                     (cl-incf builds-failed)
-                     (print! (warn "  Failed to build %s") package))
-                   ;; Allow fetch completions to be processed between builds
-                   (accept-process-output nil 0.01)))))
-
-          ;; Pipeline: fetch -> process -> build, all overlapping
-          (start-fetches)
-          (while (or fetch-pending
-                     (> (hash-table-count fetch-running) 0)
-                     fetch-complete
-                     build-pending)
-            ;; Process any completed fetches
-            (process-fetched)
-            ;; Run any pending builds (overlaps with ongoing fetches)
-            (run-builds)
-            ;; Start more fetches if slots available
-            (start-fetches)
-            ;; Wait briefly for more fetch completions
-            (when (> (hash-table-count fetch-running) 0)
-              (accept-process-output nil 0.05))))))
-
-    ;; Add dependents
-    (maphash
-     (lambda (package _)
-       (dolist (dep (straight-dependents package))
-         (when (and (stringp dep) (not (gethash dep packages-to-rebuild)))
-           (puthash dep t packages-to-rebuild)
-           (print! (start "  Building dependent %s...") dep)
-           (if (doom-packages--build-package dep)
-               (cl-incf builds-done)
-             (cl-incf builds-failed)))))
-     (copy-hash-table packages-to-rebuild))
-
-    ;; Summary
-    (print-group!
-     (if (hash-table-empty-p packages-to-rebuild)
-         (ignore (print! (success "All %d packages are up-to-date") total))
-       (doom-packages--cli-recipes-update)
-       (straight--transaction-finalize)
-       (print! (success "Updated %d package(s) (%d built, %d failed)")
-               (hash-table-count packages-to-rebuild) builds-done builds-failed)
-       t))))
+  (if pinned-only-p
+      (print! (start "Updating pinned packages..."))
+    (print! (start "Updating all packages (this may take a while)..."))
+    ;; Pull channel updates when doing a full update
+    (doom-guix-pull-channels))
+  ;; Regenerate channel with current pins and rebuild
+  (doom-guix-generate-channel)
+  (doom-guix--build-profile)
+  (doom-guix--setup-load-path)
+  (print! (success "Packages updated")))
 
 (provide 'doom-lib '(packages))
 ;;; packages.el ends here

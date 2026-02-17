@@ -229,7 +229,8 @@ in."
   (print! (start "Checking for stale elc files..."))
   (elc-check-dir doom-core-dir)
   (elc-check-dir doom-modules-dir)
-  (elc-check-dir (doom-path doom-local-dir "straight" straight-build-dir))
+  (when (file-directory-p doom-guix-profile-dir)
+    (elc-check-dir doom-guix-profile-dir))
 
   (print! (start "Checking for problematic git global settings..."))
   (if (executable-find "git")
@@ -249,7 +250,7 @@ in."
       (print-group!
         (doom-initialize t)
         (doom-startup)
-        (require 'straight)
+        (require 'doom-guix)
 
         (print! (success "Initialized Doom Emacs %s") doom-version)
         (print!

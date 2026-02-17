@@ -56,9 +56,8 @@ OPTIONS:
     during the execution of this command. Use --rebuild as well to do so for all
     packages."
   :benchmark t
-  (when aot?
-    (after! straight
-      (setq straight--native-comp-available t)))
+  ;; AOT native compilation is handled post-install by Doom's compilation
+  ;; pipeline, not by Guix's build system
   (when jobs
     (setq native-comp-async-jobs-number (truncate jobs)))
   (let ((emacs-running?

@@ -35,17 +35,6 @@ libraries. It is the equivalent of the following shell commands:
   (let ((force? (doom-cli-context-suppress-prompts-p context)))
     (cond
      (packages?
-      ;; HACK It's messy to use straight to upgrade straight, due to the
-      ;;   potential for backwards incompatibility, so we staticly check if
-      ;;   Doom's `package!' declaration for straight has changed. If it has,
-      ;;   delete straight so 'doom sync' will install the new version for us.
-      ;;
-      ;;   Clumsy, but a better solution is in the works.
-      (let ((recipe (doom-cli-context-get context 'straight-recipe)))
-        (when (and recipe (not (equal recipe (doom-upgrade--get-straight-recipe))))
-          (print! (item "Preparing straight for an update"))
-          (delete-directory (doom-path straight-base-dir "straight/repos/straight.el")
-                            'recursive)))
       (call! (append '("sync" "-u")
                      (if aot? '("--aot"))
                      (if nobuild? '("-B"))
@@ -140,7 +129,6 @@ libraries. It is the equivalent of the following shell commands:
                     (ignore (print! (error "Aborted")))
                   (print! (start "Upgrading Doom Emacs..."))
                   (print-group!
-                    (doom-cli-context-put context 'straight-recipe (doom-upgrade--get-straight-recipe))
                     (or (and (zerop (car (sh! "git" "reset" "--hard" target-remote)))
                              (equal (cdr (sh! "git" "rev-parse" "HEAD")) new-rev))
                         (error "Failed to check out %s" (substring new-rev 0 10)))))))))
@@ -154,15 +142,5 @@ libraries. It is the equivalent of the following shell commands:
     (if (= 0 success)
         (split-string stdout "\n" t)
       (error "Failed to check working tree in %s" dir))))
-
-(defun doom-upgrade--get-straight-recipe ()
-  (with-temp-buffer
-    (insert-file-contents (doom-path doom-core-dir doom-module-packages-file))
-    (when (re-search-forward "(package! straight" nil t)
-      (goto-char (match-beginning 0))
-      (let ((sexp (sexp-at-point)))
-        (plist-put sexp :recipe
-                   (eval (plist-get sexp :recipe)
-                         t))))))
 
 ;;; upgrade.el ends here

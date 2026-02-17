@@ -714,14 +714,13 @@ safely cleaned up with 'doom sync' or 'doom gc'."
 
   ;; Refresh package.el the first time you call `package-install', so it's still
   ;; trivially usable. Remember to run 'doom sync' to purge them; they can
-  ;; conflict with packages installed via straight!
+  ;; conflict with packages installed via Guix!
   (add-transient-hook! 'package-install (package-refresh-contents)))
 
-;; DEPRECATED: Interactive sessions won't be able to interact with Straight (or
-;;   Elpaca) in the future, so this is temporary.
-(with-eval-after-load 'straight
-  (require 'doom-straight)
-  (doom-initialize-packages))
+;; DEPRECATED: straight.el eval-after-load removed. doom-initialize-packages
+;; is now called directly by the CLI and interactive init sequences, since
+;; doom-guix is a core library loaded during early boot (not a lazy external
+;; package like straight.el was).
 
 
 ;;

@@ -1,22 +1,9 @@
 ;; -*- no-byte-compile: t; -*-
 ;;; email/notmuch/packages.el
 
+;; NOTE: Guix's notmuch package handles version generation via its own build
+;;   system, so the pre-build workaround for straight.el is no longer needed.
 (package! notmuch
-  :recipe (:pre-build
-           (with-temp-file "emacs/notmuch-version.el"
-             (insert-file-contents "emacs/notmuch-version.el.tmpl")
-             (re-search-forward "%VERSION%")
-             (replace-match
-              (format "\"%s+%s~%.7s\""
-                      (with-temp-buffer (insert-file-contents "version.txt")
-                                        (string-trim (buffer-string)))
-                      (save-match-data
-                        (let ((desc (doom-call-process "git" "describe" "--abbrev=7" "--match" "[0-9.]*")))
-                          (if (zerop (car desc))
-                              (car (last (split-string (cdr desc) "-") 2))
-                            "??")))
-                      (cdr (doom-call-process "git" "rev-parse" "HEAD")))
-              t t)))
   :pin "5c921b6c0b2df460c7d50f6563edf700d0420732")
 
 (when (modulep! +org)

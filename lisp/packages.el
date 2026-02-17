@@ -10,16 +10,6 @@
 (package! gcmh
   :pin "0089f9c3a6d4e9a310d0791cf6fa8f35642ecfd9")
 
-;; doom-packages.el
-(package! straight
-  :type 'core
-  :recipe `(:host github
-            :repo "radian-software/straight.el"
-            :branch "develop"
-            :local-repo "straight.el"
-            :files ("straight*.el"))
-  :pin "09b789a8596cacca6bbff866500373541a85ffa2")
-
 ;; doom-ui.el
 (package! nerd-icons :pin "9a7f44db9a53567f04603bc88d05402cad49c64c")
 (package! hide-mode-line :pin "ddd154f1e04d666cd004bf8212ead8684429350d")

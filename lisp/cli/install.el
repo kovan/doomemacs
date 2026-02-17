@@ -91,10 +91,6 @@ Change `$DOOMDIR' with the `--doomdir' option, e.g.
                 (y-or-n-p "Generate an envvar file? (see `doom help env` for details)"))
         (call! '(env))))
 
-    (when aot?
-      (after! straight
-        (setq straight--native-comp-available t)))
-
     ;; Install Doom packages
     (if (eq install? :no)
         (print! (warn "Not installing plugins, as requested"))

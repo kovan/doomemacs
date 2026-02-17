@@ -1601,7 +1601,7 @@ For more about modules and flags, see `doom!'."
 ;;; `doom-package'
 
 (cl-defmacro package!
-    (name &rest plist &key built-in recipe ignore _type _pin _disable _env)
+    (name &rest plist &key built-in recipe ignore _type _pin _disable _env _guix-name)
   "Declares a package and how to install it (if applicable).
 
 This macro is declarative and does not load nor install packages. It is used to
@@ -1622,9 +1622,15 @@ Accepts the following properties:
      `virtual' = this package is not tracked by Doom's package manager. It won't
        be installed or uninstalled. Use this to pin 2nd order dependencies.
  :recipe RECIPE
-   Specifies a straight.el recipe to allow you to acquire packages from external
-   sources. See https://github.com/radian-software/straight.el#the-recipe-format
-   for details on this recipe.
+   A plist specifying where to acquire this package. Accepts the following keys:
+     :host - Repository host (github, gitlab, codeberg, sourcehut, bitbucket)
+     :repo - Repository path (e.g. \"user/repo\")
+     :url  - Direct git URL (alternative to :host/:repo)
+     :files - List of files to include in the build
+     :branch - Git branch to track
+     :build - Build instructions (t, nil, or list of build steps)
+     :pre-build - Elisp form to run before building
+     :local-repo - Local directory name or path for the repo
  :disable BOOL
    Do not install or update this package AND disable all of its `use-package!'
    and `after!' blocks.
@@ -1641,6 +1647,9 @@ Accepts the following properties:
  :env ALIST
    Parameters and envvars to set while the package is building. If these values
    change, the package will be rebuilt on next 'doom sync'.
+ :guix-name STR
+   Override the Guix package name. By default, packages use the `emacs-<name>'
+   convention. Use this when the Guix name differs.
 
 Returns t if package is successfully registered, and nil if it was disabled
 elsewhere."
@@ -1678,9 +1687,9 @@ elsewhere."
      (condition-case e
          (when-let (recipe (plist-get plist :recipe))
            (cl-destructuring-bind
-               (&key local-repo _files _flavor _build _pre-build _post-build
-                     _includes _type _repo _host _branch _protocol _remote
-                     _nonrecursive _fork _depth _source _inherit)
+               (&key local-repo _files _build _pre-build
+                     _repo _host _branch _url
+                     &allow-other-keys)
                recipe
              ;; Expand :local-repo from current directory
              (when local-repo

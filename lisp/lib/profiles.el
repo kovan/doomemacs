@@ -437,19 +437,14 @@ caches them in `doom--profiles'. If RELOAD? is non-nil, refresh the cache."
   `((defun doom--startup-loaddefs-packages ()
       (let ((load-in-progress t))
         ,@(doom-autoloads--scan
-           ;; Create a list of packages starting with the Nth-most dependencies
-           ;; by walking the package dependency tree depth-first. This ensures
-           ;; any load-order constraints in package autoloads are always met.
-           (let (packages)
-             (letf! (defun* walk-packages (pkglist)
-                      (cond ((null pkglist) nil)
-                            ((stringp pkglist)
-                             (walk-packages (nth 1 (gethash pkglist straight--build-cache)))
-                             (cl-pushnew pkglist packages :test #'equal))
-                            ((listp pkglist)
-                             (mapc #'walk-packages (reverse pkglist)))))
-               (walk-packages (mapcar #'symbol-name (mapcar #'car doom-packages))))
-             (mapcar #'straight--autoloads-file (nreverse packages)))
+           ;; Collect autoload files from the Guix profile's site-lisp.
+           ;; Guix's emacs-build-system generates autoloads for each package.
+           (cl-loop for path in (doom-guix--profile-load-paths)
+                    for autoloads = (file-name-concat path
+                                      (concat (file-name-nondirectory path)
+                                              "-autoloads.el"))
+                    when (file-exists-p autoloads)
+                    collect autoloads)
            doom-autoloads-excluded-files
            'literal))
       ,@(when-let* ((info-dirs

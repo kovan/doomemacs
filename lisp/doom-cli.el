@@ -173,8 +173,8 @@ Must have two arguments, one for session id and the other for log type.")
 (defvar doom-cli-log-backtrace-depth 12
   "How many frames of the backtrace to display in stdout.")
 
-(defvar doom-cli-log-straight-error-lines 16
-  "How many lines of straight.el errors to display in stdout.")
+(defvar doom-cli-log-guix-error-lines 16
+  "How many lines of Guix errors to display in stdout.")
 
 (defvar doom-cli-log-benchmark-threshold 5
   "How much execution time (in seconds) before benchmark is shown.
@@ -968,31 +968,8 @@ considered as well."
          (load-read-function #'read)
          (backtrace (doom-backtrace))
          (context (or context (make-doom-cli-context)))
-         (straight-error
-          (and (bound-and-true-p straight-process-buffer)
-               (or (member straight-process-buffer data)
-                   (string-match-p (regexp-quote straight-process-buffer)
-                                   (error-message-string data)))
-               (with-current-buffer (straight--process-buffer)
-                 (save-excursion
-                   (goto-char (point-max))
-                   (buffer-substring (if (re-search-backward "^\\[Return code: 0\\]$" nil t)
-                                         (point-at-bol 2)
-                                       (point-min))
-                                     (point-max))))))
          (error-file (doom-cli--output-file 'error context)))
     (cond
-     (straight-error
-      (print! (error "The package manager threw an error"))
-      (print! (error "Last %d lines of straight's error log:")
-              doom-cli-log-straight-error-lines)
-      (print-group! (print! "%s" straight-error))
-      (print! (warn "Wrote extended straight log to %s")
-              (path (let ((coding-system-for-write 'utf-8-auto))
-                      (with-file-modes #o600
-                        (with-temp-file error-file
-                          (insert-buffer-substring (straight--process-buffer))))
-                      error-file))))
      ((eq type 'error)
       (let* ((generic? (eq (car data) 'error))
              (doom-cli-log-backtrace-depth doom-cli-log-backtrace-depth)
@@ -1991,7 +1968,9 @@ errors to `doom-cli-error-file')."
 (defalias 'sh!! #'doom-exec-process)
 
 ;; TODO Make `git!' into a more sophisticated wrapper around git
-(defalias 'git! (doom-partial #'straight--process-run "git"))
+(defun git! (&rest args)
+  "Run git with ARGS synchronously, piping output to stdout."
+  (apply #'doom-exec-process "git" args))
 
 (defun get! (key) (doom-cli-context-get doom-cli--context key))
 
