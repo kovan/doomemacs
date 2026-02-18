@@ -1,19 +1,15 @@
 ;;; lisp/cli/test.el -*- lexical-binding: t; -*-
 ;;; Commentary:
 ;;
-;; The heart of Doom's test DSL and framework. Powered by either ERT or
-;; Buttercup, this extends testing frameworks to allow for isolated execution
-;; contexts on several levels, a more sophisticated CLI for tests, and
-;; integration with Doom's profiles system so testing environments can be
-;; generated on-the-fly.
+;; The heart of Doom's test DSL and framework. Powered by Buttercup, this
+;; extends testing to allow for isolated execution contexts on several levels,
+;; a more sophisticated CLI for tests, and integration with Doom's profiles
+;; system so testing environments can be generated on-the-fly.
 ;;
 ;;; Code:
 
 ;;
 ;;; Variables
-
-(defvar doom-test-backend 'ert
-  "One of `ert' or `buttercup'.")
 
 (defvar doom-test-isolation-level nil
   "Determines the testing strategy for tests.
@@ -30,12 +26,11 @@ Should be one of:
 ;;; Commands
 
 (defcli! test
-    ((backend ("--ert" "--buttercup"))
-     (jobs    ("-j" "--jobs" int))
+    ((jobs ("-j" "--jobs" int))
      &rest targets)
   "Run Doom unit tests.
 
-Discovers and runs ERT test files from lisp/test/ (core tests) and
+Discovers and runs Buttercup test files from lisp/test/ (core tests) and
 modules/**/test/ (module tests).
 
 If TARGETS are given, only test files whose path contains one of the target
@@ -45,15 +40,9 @@ strings are loaded. For example:
   doom test lang/python  ; runs modules/lang/python/test/*.el
 
 OPTIONS:
-  --ert
-    Use ERT as the test backend (default).
-  --buttercup
-    Use Buttercup as the test backend.
   -j, --jobs
     Number of threads for native compilation during tests."
   :benchmark t
-  (when backend
-    (setq doom-test-backend (intern (string-remove-prefix "--" backend))))
   (when jobs
     (setq native-comp-async-jobs-number (truncate jobs)))
   (let* ((test-files (doom-test--discover-files targets))
@@ -64,15 +53,10 @@ OPTIONS:
                   (format " matching: %s" (string-join targets ", "))
                 ""))
       (exit! 1))
-    (print! (start "Running %d test file%s with %s...")
+    (print! (start "Running %d test file%s...")
             file-count
-            (if (= file-count 1) "" "s")
-            doom-test-backend)
-    (pcase doom-test-backend
-      ('ert       (doom-test--run-ert test-files))
-      ('buttercup (doom-test--run-buttercup test-files))
-      (_ (print! (error "Unknown test backend: %s") doom-test-backend)
-         (exit! 1)))))
+            (if (= file-count 1) "" "s"))
+    (doom-test--run test-files)))
 
 
 ;;
@@ -114,31 +98,39 @@ contains one of the target strings are returned."
   (cl-remove-if-not #'file-directory-p
                     (directory-files dir t "\\`[^.]")))
 
-(defun doom-test--run-ert (test-files)
-  "Load TEST-FILES and run all ERT tests defined in them."
-  (require 'ert)
-  (print-group!
-    (dolist (file test-files)
-      (print! (item "Loading %s") (path file))
-      (load file nil 'nomessage 'nosuffix))
-    (print! (start "Running ERT tests..."))
-    (let* ((stats (ert-run-tests-batch t))
-           (unexpected (ert-stats-completed-unexpected stats))
-           (total (ert-stats-total stats))
-           (passed (- total unexpected)))
-      (print! (if (zerop unexpected)
-                  (success "All %d tests passed" total)
-                (error "%d/%d tests failed" unexpected total)))
-      (unless (zerop unexpected)
-        (exit! 1)))))
+(defun doom-test--ensure-buttercup ()
+  "Ensure buttercup is loadable, searching common install locations.
+Doom redirects `user-emacs-directory', so `package-initialize' won't find
+packages installed via package.el without help."
+  (unless (featurep 'buttercup)
+    ;; Search straight.el build dirs (Doom's package manager)
+    (when (boundp 'doom-profile-data-dir)
+      (dolist (dir (file-expand-wildcards
+                    (expand-file-name "straight/build*/buttercup"
+                                      doom-profile-data-dir)))
+        (when (file-directory-p dir)
+          (add-to-list 'load-path dir))))
+    ;; Search package.el elpa dirs
+    (dolist (elpa-dir (list (expand-file-name "elpa" doom-emacs-dir)
+                            (expand-file-name
+                             "emacs/elpa"
+                             (or (getenv "XDG_CONFIG_HOME")
+                                 (expand-file-name "~/.config")))
+                            (expand-file-name "~/.emacs.d/elpa")))
+      (when (file-directory-p elpa-dir)
+        (dolist (pkg-dir (file-expand-wildcards
+                          (expand-file-name "buttercup-*" elpa-dir)))
+          (when (file-directory-p pkg-dir)
+            (add-to-list 'load-path pkg-dir)))))
+    (condition-case nil
+        (require 'buttercup)
+      (error
+       (print! (error "Buttercup is not installed. Install it with your package manager."))
+       (exit! 1)))))
 
-(defun doom-test--run-buttercup (test-files)
+(defun doom-test--run (test-files)
   "Load TEST-FILES and run all Buttercup tests defined in them."
-  (condition-case nil
-      (require 'buttercup)
-    (error
-     (print! (error "Buttercup is not installed. Use --ert or install buttercup."))
-     (exit! 1)))
+  (doom-test--ensure-buttercup)
   (print-group!
     (dolist (file test-files)
       (print! (item "Loading %s") (path file))
@@ -146,8 +138,12 @@ contains one of the target strings are returned."
     (print! (start "Running Buttercup tests..."))
     (let ((buttercup-reporter #'buttercup-reporter-batch))
       (buttercup-run))
-    ;; Buttercup signals on failure, so reaching here means success
-    (print! (success "All tests passed"))))
+    (let ((total (buttercup-suites-total-specs-defined buttercup-suites))
+          (failed (buttercup-suites-total-specs-failed buttercup-suites)))
+      (if (zerop failed)
+          (print! (success "All %d tests passed" total))
+        (print! (error "%d/%d tests failed" failed total))
+        (exit! 1)))))
 
 (provide 'doom-cli-test)
 ;;; test.el ends here
