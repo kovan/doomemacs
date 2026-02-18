@@ -65,23 +65,8 @@ Guix is already available. No extra steps needed.
 sudo apt install guix
 ```
 
-If the version in your distro's repos is too old, use the official installer:
-
-```sh
-cd /tmp
-wget https://git.savannah.gnu.org/cgit/guix.git/plain/etc/guix-install.sh
-chmod +x guix-install.sh
-sudo ./guix-install.sh
-```
-
-### Fedora
-
-```sh
-cd /tmp
-wget https://git.savannah.gnu.org/cgit/guix.git/plain/etc/guix-install.sh
-chmod +x guix-install.sh
-sudo ./guix-install.sh
-```
+If the version in your distro's repos is too old, use the official installer
+(see below).
 
 ### Arch Linux
 
@@ -89,13 +74,11 @@ sudo ./guix-install.sh
 pacman -S guix
 ```
 
-Or from the AUR:
+Or from the AUR: `yay -S guix`
 
-```sh
-yay -S guix
-```
+### Fedora / openSUSE / macOS / other
 
-### openSUSE
+Use the official Guix installer script:
 
 ```sh
 cd /tmp
@@ -104,18 +87,11 @@ chmod +x guix-install.sh
 sudo ./guix-install.sh
 ```
 
-### macOS
-
-```sh
-cd /tmp
-curl -O https://git.savannah.gnu.org/cgit/guix.git/plain/etc/guix-install.sh
-chmod +x guix-install.sh
-sudo ./guix-install.sh
-```
-
 > [!NOTE]
-> On macOS, you may need to set up the Guix daemon and build users manually.
-> See the [Guix installation manual](https://guix.gnu.org/manual/en/html_node/Installation.html) for full details.
+> On macOS, use `curl -O` instead of `wget`, and you may need to set up the
+> Guix daemon and build users manually. See the
+> [Guix installation manual](https://guix.gnu.org/manual/en/html_node/Installation.html)
+> for full details.
 
 ### Post-install (all platforms)
 
