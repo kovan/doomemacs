@@ -66,16 +66,43 @@ package's name as a symbol, and whose CDR is the plist supplied to its
 During initial setup, these may need to be installed via Guix before the full
 profile is built."
   (doom-log "Ensuring core packages")
-  (dolist (package packages)
-    (let* ((name (car package))
-           (guix-name (doom-guix--package-name name)))
-      (unless (doom-package-installed-p name)
-        (print! (start "Installing core package %s...") name)
-        (doom-guix--call! "package"
-                          "--profile" doom-guix-profile-dir
-                          "--install" guix-name))
-      ;; Ensure it's on load-path
-      (when-let* ((path (doom-guix--package-load-path name)))
+  (let (missing)
+    (dolist (package packages)
+      (let ((name (car package)))
+        (unless (doom-package-installed-p name)
+          (push package missing))))
+    (when missing
+      (print! (start "Installing %d core package(s)..." (length missing)))
+      ;; Install all missing core packages in one repl session
+      (doom-guix--with-repl
+        (doom-guix--repl-load-modules)
+        (doom-guix--repl-eval "(define %doom-store (open-connection))")
+        (let (pkg-vars)
+          (dolist (package missing)
+            (cl-destructuring-bind (name &key recipe pin &allow-other-keys)
+                package
+              (let* ((var-name (concat "doom-" (symbol-name name)))
+                     (expr (doom-guix--scheme-package-expr name recipe pin)))
+                (doom-guix--repl-eval expr)
+                (push var-name pkg-vars))))
+          (doom-guix--repl-eval
+           (format "(define %%doom-manifest (packages->manifest (list %s)))"
+                   (string-join (nreverse pkg-vars) " ")))
+          (doom-guix--repl-eval
+           "(define %doom-drv (run-with-store %doom-store (profile-derivation %doom-manifest #:hooks '())))")
+          (doom-guix--repl-eval
+           "(build-derivations %doom-store (list %doom-drv))")
+          (let* ((output (doom-guix--repl-eval
+                          "(derivation->output-path %doom-drv)"))
+                 (drv-path (if (listp output) (car output) output)))
+            (when (and drv-path (stringp drv-path))
+              (when (file-symlink-p doom-guix-profile-dir)
+                (delete-file doom-guix-profile-dir))
+              (make-symbolic-link drv-path doom-guix-profile-dir t)))
+          (doom-guix--repl-eval "(close-connection %doom-store)"))))
+    ;; Ensure all core packages are on load-path
+    (dolist (package packages)
+      (when-let* ((path (doom-guix--package-load-path (car package))))
         (add-to-list 'load-path path)))))
 
 ;;;###autoload
@@ -173,8 +200,8 @@ Queries Guix for the dependency tree."
   (cl-check-type package symbol)
   (let* ((guix-name (doom-guix--package-name package))
          (result (doom-guix--call "package"
-                                  "--profile" doom-guix-profile-dir
-                                  "--list-installed" (concat "^" guix-name "$"))))
+                                  (format "--profile=%s" doom-guix-profile-dir)
+                                  (format "--list-installed=%s" (concat "^" guix-name "$")))))
     ;; Guix doesn't easily expose dependency trees via CLI
     ;; Return nil for now; dependency tracking is handled by Guix internally
     nil))
@@ -762,14 +789,13 @@ Must be run from a magit diff buffer."
         (print! (start "Rebuilding all packages (this may take a while)..."))
       (print! (start "Ensuring packages are installed and built..."))))
   (print-group!
-    ;; Generate the local Guix channel from doom-packages
-    (doom-guix-generate-channel)
-    ;; Build the profile
-    (when force-p
-      ;; Force rebuild by removing the profile
-      (when (file-exists-p doom-guix-profile-dir)
-        (delete-file doom-guix-profile-dir)))
-    (doom-guix--build-profile)
+    ;; Pull channels for unpinned package availability
+    (doom-guix-pull-channels)
+    ;; Force rebuild by removing the profile
+    (when (and force-p (file-exists-p doom-guix-profile-dir))
+      (delete-file doom-guix-profile-dir))
+    ;; Build the profile via guix repl
+    (doom-guix--build-profile-via-repl)
     ;; Set up load paths
     (doom-guix--setup-load-path)
     ;; Handle native compilation
@@ -789,9 +815,8 @@ Must be run from a magit diff buffer."
     (print! (start "Updating all packages (this may take a while)..."))
     ;; Pull channel updates when doing a full update
     (doom-guix-pull-channels))
-  ;; Regenerate channel with current pins and rebuild
-  (doom-guix-generate-channel)
-  (doom-guix--build-profile)
+  ;; Build profile via repl with current pins
+  (doom-guix--build-profile-via-repl)
   (doom-guix--setup-load-path)
   (print! (success "Packages updated")))
 

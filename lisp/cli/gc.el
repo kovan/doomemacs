@@ -22,7 +22,7 @@
     (print! (start "Cleaning Guix profile..."))
     (print-group!
       (let ((result (doom-guix--call "gc"
-                                     "--profile" doom-guix-profile-dir)))
+                                     (format "--profile=%s" doom-guix-profile-dir))))
         (if (zerop (car result))
             (progn
               (print! (success "Guix garbage collection complete"))
@@ -38,7 +38,7 @@
     (print! (start "Purging old Guix profile generations..."))
     (print-group!
       (let ((result (doom-guix--call "package"
-                                     "--profile" doom-guix-profile-dir
+                                     (format "--profile=%s" doom-guix-profile-dir)
                                      "--delete-generations")))
         (if (zerop (car result))
             (progn
@@ -83,12 +83,12 @@
     0))
 
 (defun doom-gc--channel ()
-  "Clean up the generated Guix channel directory."
+  "Clean up the Guix channel directory.
+Only channels.scm is stored here now; it will be regenerated on next pull."
   (if (not (file-directory-p doom-guix-channel-dir))
       (prog1 0
-        (print! (item "No Guix channel to clean")))
-    ;; Channel will be regenerated on next sync, so this is safe
-    (print! (item "Guix channel will be regenerated on next sync"))
+        (print! (item "No Guix channel directory to clean")))
+    (print! (item "Channel config will be regenerated on next pull"))
     0))
 
 ;;

@@ -76,126 +76,79 @@
 
 
 ;;
-;;; Package definition generation
+;;; Scheme package expression generation
 
-(describe "doom-guix--generate-package-definition"
-  (it "produces a definition with git-fetch and commit for pinned packages"
+(describe "doom-guix--scheme-package-expr"
+  (it "produces an inheriting definition with git-fetch for pinned packages"
     (let ((doom-packages '((magit :recipe (:host github :repo "magit/magit"))))
           (doom-guix-name-map nil)
           (doom-guix--hash-cache (make-hash-table :test #'equal)))
       (puthash (cons "https://github.com/magit/magit" "abc123")
                "0fakehash00000000000000000000000000000000000000000000"
                doom-guix--hash-cache)
-      (let ((def (doom-guix--generate-package-definition
-                  'magit '(:host github :repo "magit/magit") "abc123")))
-        (expect def :to-be-truthy)
-        (expect def :to-match "define-public emacs-magit")
-        (expect def :to-match "commit \"abc123\"")
-        (expect def :to-match "git-fetch")
-        (expect def :to-match "0fakehash"))))
+      (let ((sexpr (doom-guix--scheme-package-expr
+                   'magit '(:host github :repo "magit/magit") "abc123")))
+        (expect sexpr :to-be-truthy)
+        (expect sexpr :to-match "define doom-magit")
+        (expect sexpr :to-match "inherit")
+        (expect sexpr :to-match "specification->package")
+        (expect sexpr :to-match "git-fetch")
+        (expect sexpr :to-match "abc123")
+        (expect sexpr :to-match "0fakehash"))))
 
-  (it "produces an inheriting definition for unpinned packages"
+  (it "produces a specification->package reference for unpinned packages"
     (let ((doom-packages nil)
           (doom-guix-name-map nil))
-      (let ((def (doom-guix--generate-package-definition 'evil nil nil)))
-        (expect def :to-be-truthy)
-        (expect def :to-match "define-public emacs-evil")
-        (expect def :to-match "version \"latest\"")
-        (expect def :not :to-match "git-fetch"))))
+      (let ((sexpr (doom-guix--scheme-package-expr 'evil nil nil)))
+        (expect sexpr :to-be-truthy)
+        (expect sexpr :to-match "define doom-evil")
+        (expect sexpr :to-match "specification->package")
+        (expect sexpr :not :to-match "git-fetch")
+        (expect sexpr :not :to-match "inherit"))))
 
-  (it "produces #:include for custom :files"
+  (it "uses emacs-<name> guix name in specification->package"
     (let ((doom-packages nil)
           (doom-guix-name-map nil))
-      (let ((def (doom-guix--generate-package-definition
-                  'foo '(:host github :repo "user/foo" :files ("foo.el" "bar.el"))
-                  nil)))
-        (expect def :to-match "#:include")
-        (expect def :to-match "\"foo.el\"")
-        (expect def :to-match "\"bar.el\""))))
-
-  (it "produces propagated-inputs for custom :depends"
-    (let ((doom-packages nil)
-          (doom-guix-name-map nil))
-      (let ((def (doom-guix--generate-package-definition
-                  'foo '(:host github :repo "user/foo" :depends (bar baz))
-                  nil)))
-        (expect def :to-match "propagated-inputs")
-        (expect def :to-match "emacs-bar")
-        (expect def :to-match "emacs-baz"))))
-
-  (it "uses emacs-build-system"
-    (let ((doom-packages nil)
-          (doom-guix-name-map nil))
-      (let ((def (doom-guix--generate-package-definition 'foo nil nil)))
-        (expect def :to-match "emacs-build-system")))))
+      (let ((sexpr (doom-guix--scheme-package-expr 'foo nil nil)))
+        (expect sexpr :to-match "\"emacs-foo\"")))))
 
 
 ;;
-;;; Channel generation
+;;; REPL response parsing
+
+(describe "doom-guix--parse-repl-response"
+  (it "parses (values ...) into a list"
+    (expect (doom-guix--parse-repl-response
+             "(values \"/gnu/store/abc-profile\")")
+            :to-equal '("/gnu/store/abc-profile")))
+
+  (it "parses multiple values"
+    (expect (doom-guix--parse-repl-response "(values 1 2 3)")
+            :to-equal '(1 2 3)))
+
+  (it "parses boolean values"
+    (expect (doom-guix--parse-repl-response "(values #t)")
+            :to-equal '("#t")))
+
+  (it "signals error for exception responses"
+    (expect (doom-guix--parse-repl-response
+             "(exception misc-error \"something broke\")")
+            :to-throw 'error))
+
+  (it "signals error for empty responses"
+    (expect (doom-guix--parse-repl-response "")
+            :to-throw 'error))
+
+  (it "signals error for unexpected responses"
+    (expect (doom-guix--parse-repl-response "garbage")
+            :to-throw 'error)))
+
+
+;;
+;;; Channel management
 
 (describe "doom-guix channel generation"
-  (it "writes channel metadata correctly"
-    (let* ((tmpdir (make-temp-file "doom-test-guix-" t))
-           (doom-guix-channel-dir tmpdir))
-      (unwind-protect
-          (progn
-            (doom-guix--write-channel-metadata)
-            (let ((content (with-temp-buffer
-                             (insert-file-contents
-                              (file-name-concat tmpdir ".guix-channel"))
-                             (buffer-string))))
-              (expect content :to-match "(channel")
-              (expect content :to-match "(version 0)")
-              (expect content :to-match (regexp-quote tmpdir))))
-        (delete-directory tmpdir t))))
-
-  (it "skips disabled, ignored, and built-in packages in channel module"
-    (let* ((tmpdir (make-temp-file "doom-test-guix-" t))
-           (doom-guix-channel-dir tmpdir)
-           (doom-guix-name-map nil)
-           (doom-packages '((active-pkg :pin "aaa111" :recipe (:host github :repo "u/active"))
-                            (disabled-pkg :disable t :pin "bbb222" :recipe (:host github :repo "u/disabled"))
-                            (ignored-pkg :ignore t :pin "ccc333" :recipe (:host github :repo "u/ignored"))
-                            (builtin-pkg :type built-in)))
-           (doom-guix--hash-cache (make-hash-table :test #'equal)))
-      (puthash (cons "https://github.com/u/active" "aaa111")
-               "0fakehash00000000000000000000000000000000000000000000"
-               doom-guix--hash-cache)
-      (unwind-protect
-          (progn
-            (doom-guix--generate-channel-module)
-            (let ((content (with-temp-buffer
-                             (insert-file-contents
-                              (file-name-concat tmpdir "doom" "packages.scm"))
-                             (buffer-string))))
-              (expect content :to-match "emacs-active-pkg")
-              (expect content :not :to-match "emacs-disabled-pkg")
-              (expect content :not :to-match "emacs-ignored-pkg")
-              (expect content :not :to-match "emacs-builtin-pkg")))
-        (delete-directory tmpdir t))))
-
-  (it "skips disabled, ignored, and built-in packages in manifest"
-    (let* ((tmpdir (make-temp-file "doom-test-guix-" t))
-           (doom-guix-channel-dir tmpdir)
-           (doom-guix-name-map nil)
-           (doom-packages '((active-pkg)
-                            (disabled-pkg :disable t)
-                            (ignored-pkg :ignore t)
-                            (builtin-pkg :type built-in))))
-      (unwind-protect
-          (progn
-            (doom-guix--generate-manifest)
-            (let ((content (with-temp-buffer
-                             (insert-file-contents
-                              (file-name-concat tmpdir "doom-manifest.scm"))
-                             (buffer-string))))
-              (expect content :to-match "emacs-active-pkg")
-              (expect content :not :to-match "emacs-disabled-pkg")
-              (expect content :not :to-match "emacs-ignored-pkg")
-              (expect content :not :to-match "emacs-builtin-pkg")))
-        (delete-directory tmpdir t))))
-
-  (it "includes guix, guix-emacs, and doom channels"
+  (it "includes guix and guix-emacs channels"
     (let* ((tmpdir (make-temp-file "doom-test-guix-" t))
            (doom-guix-channel-dir tmpdir)
            (doom-guix-emacs-channel-url "https://github.com/garrgravarr/guix-emacs")
@@ -209,9 +162,10 @@
                              (buffer-string))))
               (expect content :to-match "'guix)")
               (expect content :to-match "'guix-emacs)")
-              (expect content :to-match "'doom)")
               (expect content :to-match "savannah")
-              (expect content :to-match "garrgravarr")))
+              (expect content :to-match "garrgravarr")
+              ;; No local doom channel anymore
+              (expect content :not :to-match "'doom)")))
         (delete-directory tmpdir t)))))
 
 
